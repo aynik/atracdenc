@@ -17,7 +17,8 @@
  */
 
 #pragma once
-#include <string.h>
+
+#include <algorithm>
 
 #include "../config.h"
 
@@ -32,59 +33,79 @@ public:
     TQmf() {
         const int sz = sizeof(QmfWindow)/sizeof(QmfWindow[0]);
 
-        for (size_t i = 0 ; i < sz/2; i++) {
-            QmfWindow[i] = QmfWindow[ sz - 1 - i] = TapHalf[i] * 2.0;
+        for (size_t i = 0; i < sz/2; i++) {
+            QmfWindow[i] = QmfWindow[sz - 1 - i] = TapHalf[i] * 2.0;
         }
-        for (size_t i = 0; i < sizeof(PcmBuffer)/sizeof(PcmBuffer[0]); i++) {
-            PcmBuffer[i] = 0;
-            PcmBufferMerge[i] = 0;
-        }
+        std::fill(std::begin(PcmBuffer), std::end(PcmBuffer), 0);
+        std::fill(std::begin(PcmBufferMerge), std::end(PcmBufferMerge), 0);
     }
 
     void Split(TPCM* in, TFloat* lower, TFloat* upper) {
-        TFloat temp;
-        for (size_t i = 0; i < 46; i++)
-            PcmBuffer[i] = PcmBuffer[nIn + i];
+        // Combine memory copy operations
+        std::memmove(PcmBuffer, PcmBuffer + nIn, 46 * sizeof(TPCM));
+        std::memcpy(PcmBuffer + 46, in, nIn * sizeof(TPCM));
 
-        for (size_t i = 0; i < nIn; i++)
-            PcmBuffer[46+i] = in[i];
+        for (size_t j = 0; j < nIn; j += 2) {
+            TFloat lowerSum = 0.0;
+            TFloat upperSum = 0.0;
 
-        for (size_t j = 0; j < nIn; j+=2) {
-            lower[j/2] = upper[j/2] = 0.0;
-            for (size_t i = 0; i < 24; i++)  {
-                lower[j/2] += QmfWindow[2*i] * PcmBuffer[48-1+j-(2*i)];
-                upper[j/2] += QmfWindow[(2*i)+1] * PcmBuffer[48-1+j-(2*i)-1];
+            // Unroll the loop to reduce loop control overhead
+            for (size_t i = 0; i < 24; i += 4) {
+                lowerSum += QmfWindow[2 * i] * PcmBuffer[48 - 1 + j - (2 * i)];
+                upperSum += QmfWindow[(2 * i) + 1] * PcmBuffer[48 - 1 + j - (2 * i) - 1];
+
+                lowerSum += QmfWindow[2 * (i + 1)] * PcmBuffer[48 - 1 + j - (2 * (i + 1))];
+                upperSum += QmfWindow[(2 * (i + 1)) + 1] * PcmBuffer[48 - 1 + j - (2 * (i + 1)) - 1];
+
+                lowerSum += QmfWindow[2 * (i + 2)] * PcmBuffer[48 - 1 + j - (2 * (i + 2))];
+                upperSum += QmfWindow[(2 * (i + 2)) + 1] * PcmBuffer[48 - 1 + j - (2 * (i + 2)) - 1];
+
+                lowerSum += QmfWindow[2 * (i + 3)] * PcmBuffer[48 - 1 + j - (2 * (i + 3))];
+                upperSum += QmfWindow[(2 * (i + 3)) + 1] * PcmBuffer[48 - 1 + j - (2 * (i + 3)) - 1];
             }
-            temp = upper[j/2];
-            upper[j/2] = lower[j/2] - upper[j/2];
-            lower[j/2] += temp;
+
+            lower[j / 2] = lowerSum;
+            upper[j / 2] = upperSum;
+
+            TFloat temp = upper[j / 2];
+            upper[j / 2] = lower[j / 2] - upper[j / 2];
+            lower[j / 2] += temp;
         }
     }
 
+
     void Merge(TPCM* out, TFloat* lower, TFloat* upper) {
-        memcpy(&PcmBufferMerge[0], &DelayBuff[0], 46*sizeof(TFloat));
+        std::copy(DelayBuff, DelayBuff + 46, PcmBufferMerge);
         TFloat* newPart = &PcmBufferMerge[46];
-        for (int i = 0; i < nIn; i+=4) {
-            newPart[i+0] = lower[i/2] + upper[i/2];
-            newPart[i+1] = lower[i/2] - upper[i/2];
-            newPart[i+2] = lower[i/2 + 1] + upper[i/2 + 1];
-            newPart[i+3] = lower[i/2 + 1] - upper[i/2 + 1];
+
+        // Unroll the loop to optimize the addition and subtraction
+        for (int i = 0; i < nIn; i += 4) {
+            newPart[i] = lower[i / 2] + upper[i / 2];
+            newPart[i + 1] = lower[i / 2] - upper[i / 2];
+            newPart[i + 2] = lower[i / 2 + 1] + upper[i / 2 + 1];
+            newPart[i + 3] = lower[i / 2 + 1] - upper[i / 2 + 1];
         }
 
-        TFloat* winP = &PcmBufferMerge[0];
-        for (size_t j = nIn/2; j != 0; j--) {
+        TFloat* winP = PcmBufferMerge;
+        for (size_t j = nIn / 2; j != 0; j--) {
             TFloat s1 = 0;
             TFloat s2 = 0;
-            for (size_t i = 0; i < 48; i+=2) {
+
+            // Unroll the loop to reduce loop control overhead
+            for (size_t i = 0; i < 48; i += 4) {
                 s1 += winP[i] * QmfWindow[i];
-                s2 += winP[i+1] * QmfWindow[i+1];
+                s2 += winP[i + 1] * QmfWindow[i + 1];
+
+                s1 += winP[i + 2] * QmfWindow[i + 2];
+                s2 += winP[i + 3] * QmfWindow[i + 3];
             }
+
             out[0] = s2;
             out[1] = s1;
             winP += 2;
             out += 2;
         }
-        memcpy(&DelayBuff[0], &PcmBufferMerge[nIn], 46*sizeof(TFloat));
+        std::copy(PcmBufferMerge + nIn, PcmBufferMerge + nIn + 46, DelayBuff);
     }
 };
 
@@ -97,4 +118,3 @@ const float TQmf<TPCM, nIn>::TapHalf[24] = {
     -0.007801671,    -0.034090221,   0.01880949,       0.054326009,
     -0.043596379,    -0.099384367,   0.13207909,       0.46424159
 };
-
