@@ -49,8 +49,6 @@ public:
 
 class TBlockSize {
     static std::array<int, 4> Parse(NBitStream::TBitStream* stream) {
-        //ATRAC1 - 3 subbands, ATRAC3 - 4 subbands.
-        //TODO: rewrite
         std::array<int, 4> tmp;
         tmp[0] = 2 - stream->Read(2);
         tmp[1] = 2 - stream->Read(2);

@@ -17,7 +17,6 @@ target_link_libraries(atracdenc_ut
     bitstream
     fft_impl
     atracdenc_impl
-    oma
     GTest::gtest_main
 )
 

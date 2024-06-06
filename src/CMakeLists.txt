@@ -57,12 +57,10 @@ endif()
 
 include_directories(
     "lib"
-    "oma/liboma/include"
 )
 
 set(SOURCE_FFT_LIB fft/kissfft_impl/kiss_fft.c)
 set_source_files_properties(fft/kissfft_impl/kiss_fft.c PROPERTIES COMPILE_FLAGS -Dkiss_fft_scalar=double)
-set(SOURCE_OMA_LIB oma/liboma/src/liboma.c)
 set(SOURCE_BITSTREAM_LIB bitstream/bitstream.cpp)
 set(SOURCE_ATRACDENC_IMPL
     wav.cpp
@@ -75,12 +73,6 @@ set(SOURCE_ATRACDENC_IMPL
     atrac/atrac_scale.cpp
     atrac/atrac_psy_common.cpp
     atrac/atrac1_bitalloc.cpp
-    oma.cpp
-    rm.cpp
-    at3.cpp
-    atrac3denc.cpp
-    atrac/atrac3.cpp
-    atrac/atrac3_bitstream.cpp
     mdct/mdct.cpp
 )
 
@@ -91,14 +83,13 @@ if (NOT WIN32)
 target_link_libraries(pcm_io ${SNDFILE_LIBRARIES})
 endif()
 
-add_library(oma STATIC ${SOURCE_OMA_LIB})
 add_library(bitstream STATIC ${SOURCE_BITSTREAM_LIB})
 add_library(atracdenc_impl STATIC ${SOURCE_ATRACDENC_IMPL})
-target_link_libraries(atracdenc_impl fft_impl pcm_io oma bitstream ${SNDFILE_LIBRARIES})
+target_link_libraries(atracdenc_impl fft_impl pcm_io bitstream ${SNDFILE_LIBRARIES})
 set(SOURCE_EXE
     main.cpp
     help.cpp
 )
 add_executable(atracdenc ${SOURCE_EXE})
-target_link_libraries(atracdenc pcm_io oma atracdenc_impl ${SNDFILE_LIBRARIES})
+target_link_libraries(atracdenc pcm_io atracdenc_impl ${SNDFILE_LIBRARIES})
 install(TARGETS atracdenc)

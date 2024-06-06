@@ -27,16 +27,8 @@
 #include "pcmengin.h"
 #include "wav.h"
 #include "aea.h"
-#include "rm.h"
-#include "at3.h"
 #include "config.h"
 #include "atrac1denc.h"
-#include "atrac3denc.h"
-
-#ifdef PLATFORM_WINDOWS
-#include <windows.h>
-#include <shellapi.h>
-#endif
 
 using std::cout;
 using std::cerr;
@@ -64,15 +56,6 @@ static void printProgress(int percent)
     const char symbols[4] = {'-', '\\', '|', '/'};
     cout << symbols[counter % 4]<< "  "<< percent <<"% done\r";
     fflush(stdout);
-}
-
-static string GetFileExt(const string& path) {
-    size_t dotPos = path.rfind('.');
-    std::string ext;
-    if (dotPos != std::string::npos && dotPos < path.size()) {
-        ext = path.substr(dotPos + 1);
-    }
-    return ext;
 }
 
 static int checkedStoi(const char* data, int min, int max, int def)
@@ -111,13 +94,6 @@ static void CheckInputFormat(const TWav* p)
 
     if (p->GetSampleRate() != 44100)
         throw std::runtime_error("unsupported sample rate");
-}
-
-static TWavPtr OpenWavFile(const string& inFile)
-{
-    TWav* wavPtr = new TWav(inFile);
-    CheckInputFormat(wavPtr);
-    return TWavPtr(wavPtr);
 }
 
 static void PrepareAtrac1Encoder(const string& inFile,
@@ -183,74 +159,13 @@ static void PrepareAtrac1Decoder(const string& inFile,
     atracProcessor->reset(new TAtrac1Decoder(std::move(aeaIO)));
 }
 
-static void PrepareAtrac3Encoder(const string& inFile,
-                                 const string& outFile,
-                                 const bool noStdOut,
-                                 NAtrac3::TAtrac3EncoderSettings&& encoderSettings,
-                                 uint64_t* totalSamples,
-                                 const TWavPtr& wavIO,
-                                 TPcmEnginePtr* pcmEngine,
-                                 TAtracProcessorPtr* atracProcessor)
-{
-    std::cout << "WARNING: ATRAC3 is uncompleted, result will be not good )))" << std::endl;
-    const int numChannels = encoderSettings.SourceChannels;
-    *totalSamples = wavIO->GetTotalSamples();
-    const uint64_t numFrames = (*totalSamples) / 1024;
-    if (numFrames >= UINT32_MAX) {
-        std::cerr << "Number of input samples exceeds output format limitation,"
-            "the result will be incorrect" << std::endl;
-    }
-
-    const string ext = GetFileExt(outFile);
-
-    TCompressedOutputPtr omaIO;
-
-    string contName;
-    if (ext == "wav" || ext == "at3") {
-        contName = "AT3 (RIFF)";
-        omaIO = CreateAt3Output(outFile, numChannels, numFrames,
-                encoderSettings.ConteinerParams->FrameSz,
-                encoderSettings.ConteinerParams->Js);
-    } else if (ext == "rm") {
-        contName = "RealMedia";
-        omaIO = CreateRmOutput(outFile, "test", numChannels,
-            numFrames, encoderSettings.ConteinerParams->FrameSz,
-            encoderSettings.ConteinerParams->Js);
-    } else {
-        contName = "OMA";
-        omaIO.reset(new TOma(outFile,
-            "test",
-            numChannels,
-            (int32_t)numFrames, OMAC_ID_ATRAC3,
-            encoderSettings.ConteinerParams->FrameSz,
-            encoderSettings.ConteinerParams->Js));
-    }
-
-    if (!noStdOut)
-        cout << "Input:\n Filename: " << inFile
-             << "\n Channels: " << (int)numChannels
-             << "\n SampleRate: " << wavIO->GetSampleRate()
-             << "\n Duration (sec): " << *totalSamples / wavIO->GetSampleRate()
-	     << "\nOutput:\n Filename: " << outFile
-	     << "\n Codec: ATRAC3"
-	     << "\n Container: " << contName
-             << "\n Bitrate: " << encoderSettings.ConteinerParams->Bitrate
-             << endl;
-
-    pcmEngine->reset(new TPCMEngine<TFloat>(4096,
-                                            numChannels,
-                                            TPCMEngine<TFloat>::TReaderPtr(wavIO->GetPCMReader<TFloat>())));
-    atracProcessor->reset(new TAtrac3Encoder(std::move(omaIO), std::move(encoderSettings)));
-}
-
-int main_(int argc, char* const* argv)
+int main(int argc, char* const* argv)
 {
     const char* myName = argv[0];
     static struct option longopts[] = {
-        { "encode", optional_argument, NULL, O_ENCODE },
+        { "encode", no_argument, NULL, O_ENCODE },
         { "decode", no_argument, NULL, O_DECODE },
         { "help", no_argument, NULL, O_HELP },
-        { "bitrate", required_argument, NULL, O_BITRATE},
         { "bfuidxconst", required_argument, NULL, O_BFUIDXCONST},
         { "bfuidxfast", no_argument, NULL, O_BFUIDXFAST},
         { "notransient", optional_argument, NULL, O_NOTRANSIENT},
@@ -266,32 +181,12 @@ int main_(int argc, char* const* argv)
     uint32_t bfuIdxConst = 0; //0 - auto, no const
     bool fastBfuNumSearch = false;
     bool noStdOut = false;
-    bool noGainControl = false;
-    bool noTonalComponents = false;
     NAtrac1::TAtrac1EncodeSettings::EWindowMode windowMode = NAtrac1::TAtrac1EncodeSettings::EWindowMode::EWM_AUTO;
     uint32_t winMask = 0; //0 - all is long
-    uint32_t bitrate = 0; //0 - use default for codec
-    while ((ch = getopt_long(argc, argv, "e:dhi:o:m", longopts, NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "edhi:o:m", longopts, NULL)) != -1) {
         switch (ch) {
             case O_ENCODE:
                 mode |= E_ENCODE;
-                // if arg is given, it must specify the codec; otherwise use atrac1
-                if (optarg) {
-                    if (strcmp(optarg, "atrac3") == 0) {
-                        mode |= E_ATRAC3;
-                    } else if (strcmp(optarg, "atrac3_lp4") == 0) {
-                        mode |= E_ATRAC3;
-                        bitrate = 64;
-                    } else if (strcmp(optarg, "atrac1") == 0) {
-                        // this is the default
-                    } else {
-                       // bad value
-                       string err = "unrecognized encoding codec: ";
-                       err.append(optarg);
-                       printUsage(myName, err);
-                       return 1;
-                    }
-                }
                 break;
             case O_DECODE:
                 mode |= E_DECODE;
@@ -307,9 +202,6 @@ int main_(int argc, char* const* argv)
             case 'h':
                 cout << GetHelp() << endl;
                 return 0;
-                break;
-            case O_BITRATE:
-                bitrate = checkedStoi(optarg, 32, 384, 0);
                 break;
             case O_BFUIDXCONST:
                 bfuIdxConst = checkedStoi(optarg, 1, 32, 0);
@@ -329,12 +221,6 @@ int main_(int argc, char* const* argv)
                 break;
             case O_NOSTDOUT:
                 noStdOut = true;
-                break;
-            case O_NOTONAL:
-                noTonalComponents = true;
-                break;
-            case O_NOGAINCONTROL:
-                noGainControl = true;
                 break;
             default:
                 printUsage(myName);
@@ -388,17 +274,6 @@ int main_(int argc, char* const* argv)
                 pcmFrameSz = TAtrac1Data::NumSamples;
             }
             break;
-            case (E_ENCODE | E_ATRAC3):
-            {
-                using NAtrac3::TAtrac3Data;
-                wavIO = OpenWavFile(inFile);
-                NAtrac3::TAtrac3EncoderSettings encoderSettings(bitrate * 1024, noGainControl,
-                                                                noTonalComponents, wavIO->GetChannelNum(), bfuIdxConst);
-                PrepareAtrac3Encoder(inFile, outFile, noStdOut, std::move(encoderSettings),
-                &totalSamples, wavIO, &pcmEngine, &atracProcessor);
-                pcmFrameSz = TAtrac3Data::NumSamples;;
-            }
-            break;
             default:
             {
                 throw std::runtime_error("Processing mode was not specified");
@@ -434,39 +309,4 @@ int main_(int argc, char* const* argv)
         return 1;
     }
     return 0;
-}
-
-int main(int argc, char* const* argv) {
-#ifndef PLATFORM_WINDOWS
-	return main_(argc, argv);
-# else
-	LPWSTR* argvW = CommandLineToArgvW(GetCommandLineW(), &argc);
-
-	std::vector<char*> newArgv(argc);
-
-	for (int i = 0; i < argc; i++) {
-		const size_t sz = wcslen(argvW[i]);
-		const size_t maxUtf8Len = sz * 4;
-		// 0 termination in any case
-		std::vector<char> buf(maxUtf8Len + 1);
-
-		if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, argvW[i], -1, buf.data(), maxUtf8Len, NULL, NULL)) {
-			DWORD lastError = GetLastError();
-			std::cerr << "Unable to convert argument to uft8, " << std::hex << lastError << std::endl;
-		}
-		const size_t utf8Len = strlen(buf.data());
-		newArgv[i] = new char[utf8Len + 1];
-		strcpy(newArgv[i], buf.data());
-	}
-
-
-	int rv = main_(argc, newArgv.data());
-
-	for (auto& a : newArgv) {
-		delete[] a;
-	}
-
-	LocalFree(argvW);
-	return rv;
-#endif
 }

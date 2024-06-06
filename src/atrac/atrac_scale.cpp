@@ -18,7 +18,6 @@
 
 #include "atrac_scale.h"
 #include "atrac1.h"
-#include "atrac3.h"
 #include <cmath>
 #include <iostream>
 #include <algorithm>
@@ -80,8 +79,5 @@ vector<TScaledBlock> TScaler<TBaseData>::ScaleFrame(const vector<TFloat>& specs,
 
 template
 class TScaler<NAtrac1::TAtrac1Data>;
-
-template
-class TScaler<NAtrac3::TAtrac3Data>;
 
 } //namespace NAtracDEnc
