@@ -33,6 +33,7 @@ namespace NAtracDEnc {
 enum EMode {
     E_ENCODE = 1,
     E_DECODE = 2,
+    E_TEST = 3,
 };
 
 class TAtrac1MDCT : public virtual NAtrac1::TAtrac1Data {

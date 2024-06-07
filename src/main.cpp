@@ -76,6 +76,7 @@ enum EOptions
 {
     O_ENCODE = 'e',
     O_DECODE = 'd',
+    O_TEST = 't',
     O_HELP = 'h',
     O_BITRATE = 'b',
     O_BFUIDXCONST = 1,
@@ -89,16 +90,13 @@ enum EOptions
 
 static void CheckInputFormat(const TWav* p)
 {
-//    if (p->IsFormatSupported() == false)
-//        throw std::runtime_error("unsupported format of input file");
-
     if (p->GetSampleRate() != 44100)
         throw std::runtime_error("unsupported sample rate");
 }
 
 static void PrepareAtrac1Encoder(const string& inFile,
-                                 const string& outFile, 
-                                 const bool noStdOut, 
+                                 const string& outFile,
+                                 const bool noStdOut,
                                  NAtrac1::TAtrac1EncodeSettings&& encoderSettings,
                                  uint64_t* totalSamples,
                                  TWavPtr* wavIO,
@@ -114,7 +112,6 @@ static void PrepareAtrac1Encoder(const string& inFile,
     }
     const uint8_t numChannels = (*wavIO)->GetChannelNum();
     *totalSamples = (*wavIO)->GetTotalSamples();
-    //TODO: recheck it
     const uint64_t numFrames = numChannels * (*totalSamples) / TAtrac1Data::NumSamples;
     if (numFrames >= UINT32_MAX) {
         std::cerr << "Number of input samples exceeds output format limitation,"
@@ -159,31 +156,118 @@ static void PrepareAtrac1Decoder(const string& inFile,
     atracProcessor->reset(new TAtrac1Decoder(std::move(aeaIO)));
 }
 
+void encode(const string& inFile, const string& outFile, const bool noStdOut, uint32_t bfuIdxConst, bool fastBfuNumSearch, NAtrac1::TAtrac1EncodeSettings::EWindowMode windowMode, uint32_t winMask)
+{
+    TPcmEnginePtr pcmEngine;
+    TAtracProcessorPtr atracProcessor;
+    uint64_t totalSamples = 0;
+    TWavPtr wavIO;
+    uint32_t pcmFrameSz = 0;
+
+    try {
+        if (bfuIdxConst > 8) {
+            throw std::invalid_argument("ATRAC1 mode, --bfuidxconst is a index of max used BFU. "
+                "Values [1;8] is allowed");
+        }
+        using NAtrac1::TAtrac1Data;
+        NAtrac1::TAtrac1EncodeSettings encoderSettings(bfuIdxConst, fastBfuNumSearch, windowMode, winMask);
+        PrepareAtrac1Encoder(inFile, outFile, noStdOut, std::move(encoderSettings),
+            &totalSamples, &wavIO, &pcmEngine, &atracProcessor);
+        pcmFrameSz = TAtrac1Data::NumSamples;
+    } catch (const std::exception& ex) {
+        cerr << "Fatal error: " << ex.what() << endl;
+        return;
+    }
+
+    auto atracLambda = atracProcessor->GetLambda();
+
+    uint64_t processed = 0;
+    try {
+        while (totalSamples > (processed = pcmEngine->ApplyProcess(pcmFrameSz, atracLambda))) {
+            if (!noStdOut)
+                printProgress(static_cast<int>(processed * 100 / totalSamples));
+        }
+        if (!noStdOut)
+            cout << "\nDone" << endl;
+    } catch (const TAeaIOError& err) {
+        cerr << "Aea IO fatal error: " << err.what() << endl;
+        return;
+    } catch (const TNoDataToRead&) {
+        cerr << "No more data to read from input" << endl;
+        return;
+    } catch (const std::exception& ex) {
+        cerr << "Encode error: " << ex.what() << endl;
+        return;
+    }
+}
+
+void decode(const string& inFile, const string& outFile, const bool noStdOut)
+{
+    TPcmEnginePtr pcmEngine;
+    TAtracProcessorPtr atracProcessor;
+    uint64_t totalSamples = 0;
+    TWavPtr wavIO;
+    uint32_t pcmFrameSz = 0;
+
+    try {
+        using NAtrac1::TAtrac1Data;
+        PrepareAtrac1Decoder(inFile, outFile, noStdOut,
+            &totalSamples, &wavIO, &pcmEngine, &atracProcessor);
+        pcmFrameSz = TAtrac1Data::NumSamples;
+    } catch (const std::exception& ex) {
+        cerr << "Fatal error: " << ex.what() << endl;
+        return;
+    }
+
+    auto atracLambda = atracProcessor->GetLambda();
+
+    uint64_t processed = 0;
+    try {
+        while (totalSamples > (processed = pcmEngine->ApplyProcess(pcmFrameSz, atracLambda))) {
+            if (!noStdOut)
+                printProgress(static_cast<int>(processed * 100 / totalSamples));
+        }
+        if (!noStdOut)
+            cout << "\nDone" << endl;
+    } catch (const TAeaIOError& err) {
+        cerr << "Aea IO fatal error: " << err.what() << endl;
+        return;
+    } catch (const TNoDataToRead&) {
+        cerr << "No more data to read from input" << endl;
+        return;
+    } catch (const std::exception& ex) {
+        cerr << "Decode error: " << ex.what() << endl;
+        return;
+    }
+}
+
 int main(int argc, char* const* argv)
 {
     const char* myName = argv[0];
     static struct option longopts[] = {
         { "encode", no_argument, NULL, O_ENCODE },
         { "decode", no_argument, NULL, O_DECODE },
+        { "test", no_argument, NULL, O_TEST },
         { "help", no_argument, NULL, O_HELP },
-        { "bfuidxconst", required_argument, NULL, O_BFUIDXCONST},
-        { "bfuidxfast", no_argument, NULL, O_BFUIDXFAST},
-        { "notransient", optional_argument, NULL, O_NOTRANSIENT},
-        { "nostdout", no_argument, NULL, O_NOSTDOUT},
-        { "nogaincontrol", no_argument, NULL, O_NOGAINCONTROL},
-        { NULL, 0, NULL, 0}
+        { "bfuidxconst", required_argument, NULL, O_BFUIDXCONST },
+        { "bfuidxfast", no_argument, NULL, O_BFUIDXFAST },
+        { "notransient", optional_argument, NULL, O_NOTRANSIENT },
+        { "nostdout", no_argument, NULL, O_NOSTDOUT },
+        { NULL, 0, NULL, 0 }
     };
 
     int ch = 0;
     string inFile;
     string outFile;
+    string medFile;
     uint32_t mode = 0;
-    uint32_t bfuIdxConst = 0; //0 - auto, no const
+    uint32_t bfuIdxConst = 0; // 0 - auto, no const
     bool fastBfuNumSearch = false;
     bool noStdOut = false;
     NAtrac1::TAtrac1EncodeSettings::EWindowMode windowMode = NAtrac1::TAtrac1EncodeSettings::EWindowMode::EWM_AUTO;
-    uint32_t winMask = 0; //0 - all is long
-    while ((ch = getopt_long(argc, argv, "edhi:o:m", longopts, NULL)) != -1) {
+    uint32_t winMask = 0; // 0 - all is long
+
+    while ((ch = getopt_long(argc, argv, "edthi:o:m:", longopts, NULL)) != -1) {
         switch (ch) {
             case O_ENCODE:
                 mode |= E_ENCODE;
@@ -191,13 +275,20 @@ int main(int argc, char* const* argv)
             case O_DECODE:
                 mode |= E_DECODE;
                 break;
+            case O_TEST:
+                mode |= E_TEST;
+                break;
             case 'i':
                 inFile = optarg;
                 break;
             case 'o':
                 outFile = optarg;
-                if (outFile == "-")
+                if (outFile == "-") {
                     noStdOut = true;
+                }
+                break;
+            case 'm':
+                medFile = optarg;
                 break;
             case 'h':
                 cout << GetHelp() << endl;
@@ -214,10 +305,10 @@ int main(int argc, char* const* argv)
                 if (optarg) {
                     winMask = stoi(optarg);
                 }
-                cout << "Transient detection disabled, bands: low - " <<
-                    ((winMask & 1) ? "short": "long") << ", mid - " <<
-                    ((winMask & 2) ? "short": "long") << ", hi - " <<
-                    ((winMask & 4) ? "short": "long") << endl;
+                cout << "Transient detection disabled, bands: low - "
+                     << ((winMask & 1) ? "short" : "long") << ", mid - "
+                     << ((winMask & 2) ? "short" : "long") << ", hi - "
+                     << ((winMask & 4) ? "short" : "long") << endl;
                 break;
             case O_NOSTDOUT:
                 noStdOut = true;
@@ -226,7 +317,6 @@ int main(int argc, char* const* argv)
                 printUsage(myName);
                 return 1;
         }
-
     }
     argc -= optind;
     argv += optind;
@@ -241,72 +331,29 @@ int main(int argc, char* const* argv)
         return 1;
     }
     if (outFile.empty()) {
-        cerr << "No out file" << endl;
+        cerr << "No output file" << endl;
+        return 1;
+    }
+    if (mode == E_TEST && medFile.empty()) {
+        cerr << "No intermediate file" << endl;
         return 1;
     }
 
-    TPcmEnginePtr pcmEngine;
-    TAtracProcessorPtr atracProcessor;
-    uint64_t totalSamples = 0;
-    TWavPtr wavIO;
-    uint32_t pcmFrameSz = 0; //size of one pcm frame to process
-
-    try {
-        switch (mode) {
-            case E_ENCODE:
-	        {
-                if (bfuIdxConst > 8) {
-                    throw std::invalid_argument("ATRAC1 mode, --bfuidxconst is a index of max used BFU. "
-                        "Values [1;8] is allowed");
-                }
-                using NAtrac1::TAtrac1Data;
-                NAtrac1::TAtrac1EncodeSettings encoderSettings(bfuIdxConst, fastBfuNumSearch, windowMode, winMask);
-                PrepareAtrac1Encoder(inFile, outFile, noStdOut, std::move(encoderSettings),
-                &totalSamples, &wavIO, &pcmEngine, &atracProcessor);
-                pcmFrameSz = TAtrac1Data::NumSamples;
-            }
+    switch (mode) {
+        case E_ENCODE:
+            encode(inFile, outFile, noStdOut, bfuIdxConst, fastBfuNumSearch, windowMode, winMask);
             break;
-            case E_DECODE:
-            {
-                using NAtrac1::TAtrac1Data;
-                PrepareAtrac1Decoder(inFile, outFile, noStdOut,
-                &totalSamples, &wavIO, &pcmEngine, &atracProcessor);
-                pcmFrameSz = TAtrac1Data::NumSamples;
-            }
+        case E_DECODE:
+            decode(inFile, outFile, noStdOut);
             break;
-            default:
-            {
-                throw std::runtime_error("Processing mode was not specified");
-            }
-        }
-    } catch (const std::exception& ex) {
-        cerr << "Fatal error: " << ex.what() << endl;
-        return 1;
+        case E_TEST:
+            encode(inFile, medFile, noStdOut, bfuIdxConst, fastBfuNumSearch, windowMode, winMask);
+            decode(medFile, outFile, noStdOut);
+            break;
+        default:
+            cerr << "Processing mode was not specified" << endl;
+            return 1;
     }
 
-    auto atracLambda = atracProcessor->GetLambda();
-
-    uint64_t processed = 0;
-    try {
-        while (totalSamples > (processed = pcmEngine->ApplyProcess(pcmFrameSz, atracLambda)))
-        {
-            if (!noStdOut)
-                printProgress(static_cast<int>(processed*100/totalSamples));
-        }
-        if (!noStdOut)
-            cout << "\nDone" << endl;
-    }
-    catch (const TAeaIOError& err) {
-        cerr << "Aea IO fatal error: " << err.what() << endl;
-        return 1;
-    }
-    catch (const TNoDataToRead&) {
-        cerr << "No more data to read from input" << endl;
-        return 0;
-    }
-    catch (const std::exception& ex) {
-        cerr << "Encode/Decode error: " << ex.what() << endl;
-        return 1;
-    }
     return 0;
 }
