@@ -38,7 +38,7 @@ template<class TBaseData>
 TScaledBlock TScaler<TBaseData>::Scale(const TFloat* in, uint16_t len) {
     TFloat maxAbsSpec = 0;
     for (uint16_t i = 0; i < len; ++i) {
-        const TFloat absSpec = abs(in[i]);
+        TFloat absSpec = abs(in[i]);
         if (absSpec > maxAbsSpec) {
             maxAbsSpec = absSpec;
         }
@@ -47,14 +47,15 @@ TScaledBlock TScaler<TBaseData>::Scale(const TFloat* in, uint16_t len) {
         cerr << "Scale error: absSpec > MAX_SCALE, val: " << maxAbsSpec << endl;
         maxAbsSpec = MAX_SCALE;
     }
-    const map<TFloat, uint8_t>::const_iterator scaleIter = ScaleIndex.lower_bound(maxAbsSpec);
+    const auto scaleIter = ScaleIndex.lower_bound(maxAbsSpec);
     const TFloat scaleFactor = scaleIter->first;
     const uint8_t scaleFactorIndex = scaleIter->second;
     TScaledBlock res(scaleFactorIndex);
+    res.Values.reserve(len);
     for (uint16_t i = 0; i < len; ++i) {
         TFloat scaledValue = in[i] / scaleFactor;
         if (abs(scaledValue) >= 1.0) {
-            cerr << "got "<< scaledValue << " it is wrong scalling" << endl;
+            cerr << "got " << scaledValue << " it is wrong scaling" << endl;
             scaledValue = (scaledValue > 0) ? 0.99999 : -0.99999;
         }
         res.Values.push_back(scaledValue);
@@ -65,19 +66,19 @@ TScaledBlock TScaler<TBaseData>::Scale(const TFloat* in, uint16_t len) {
 template<class TBaseData>
 vector<TScaledBlock> TScaler<TBaseData>::ScaleFrame(const vector<TFloat>& specs, const TBlockSize& blockSize) {
     vector<TScaledBlock> scaledBlocks;
-    scaledBlocks.reserve(TBaseData::MaxBfus);
+    scaledBlocks.reserve(TBaseData::MaxBfus);  // Reserve memory to avoid multiple allocations
     for (uint8_t bandNum = 0; bandNum < this->NumQMF; ++bandNum) {
         const bool shortWinMode = !!blockSize.LogCount[bandNum];
         for (uint8_t blockNum = this->BlocksPerBand[bandNum]; blockNum < this->BlocksPerBand[bandNum + 1]; ++blockNum) {
-            const uint16_t specNumStart = shortWinMode ? TBaseData::SpecsStartShort[blockNum] : 
+            const uint16_t specNumStart = shortWinMode ? TBaseData::SpecsStartShort[blockNum] :
                                                          TBaseData::SpecsStartLong[blockNum];
             scaledBlocks.emplace_back(Scale(&specs[specNumStart], this->SpecsPerBlock[blockNum]));
-		}
-	}
+        }
+    }
     return scaledBlocks;
 }
 
 template
 class TScaler<NAtrac1::TAtrac1Data>;
 
-} //namespace NAtracDEnc
+} // namespace NAtracDEnc
