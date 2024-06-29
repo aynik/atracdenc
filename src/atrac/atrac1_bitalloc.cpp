@@ -16,6 +16,15 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include <iostream>
+#include <vector>
+#include <cstdlib>
+#include <sstream>
+#include <string>
+#include <cassert>
+#include <algorithm>
+#include <cmath>
+
 #include "atrac1_bitalloc.h"
 #include "atrac_psy_common.h"
 #include "atrac_scale.h"
@@ -33,25 +42,45 @@ using std::cerr;
 using std::endl;
 using std::pair;
 
-static const uint32_t FixedBitAllocTableLong[TAtrac1BitStreamWriter::MaxBfus] = {
+static const uint32_t DefaultFixedBitAllocTableLong[TAtrac1BitStreamWriter::MaxBfus] = {
     7, 7, 7, 6, 6, 6, 6, 6, 6, 6, 6, 5, 5, 5, 5, 5, 5, 5, 5, 6,
     6, 6, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 4,
     4, 4, 3, 3, 3, 3, 3, 3, 2, 2, 2, 1, 1, 0, 0, 0
 };
 
-static const uint32_t FixedBitAllocTableShort[TAtrac1BitStreamWriter::MaxBfus] = {
+static const uint32_t DefaultFixedBitAllocTableShort[TAtrac1BitStreamWriter::MaxBfus] = {
     6, 6, 6, 6,  6, 6, 6, 6,  6, 6, 6, 6,  6, 6, 6, 6,  6, 6, 6, 6,
     6, 6, 6, 6,  5, 5, 5, 5,  5, 5, 5, 5,  5, 5, 5, 5,
     4, 4, 4, 4, 4, 4, 4, 4,   0, 0, 0, 0, 0, 0, 0, 0
 };
 
-static const uint32_t BitBoostMask[TAtrac1BitStreamWriter::MaxBfus] = {
+static const uint32_t DefaultBitBoostMask[TAtrac1BitStreamWriter::MaxBfus] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1,
     1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1,
     1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
-TBitsBooster::TBitsBooster() {
+void TAtrac1BitStreamWriter::parseEnvVariable(const char* envVarName, uint32_t* table, const uint32_t* defaultTable) {
+    const char* envVar = std::getenv(envVarName);
+    if (envVar) {
+        std::istringstream iss(envVar);
+        std::string value;
+        size_t index = 0;
+        while (std::getline(iss, value, ',') && index < MaxBfus) {
+            table[index++] = std::stoi(value);
+        }
+        // Ensure we fill remaining values with zeros if the provided env var has fewer values
+        std::fill(table + index, table + (MaxBfus - 1), 0);
+    } else
+    {
+        for (size_t i = 0; i < MaxBfus; ++i)
+        {
+            table[i] = defaultTable[i];
+        }
+    }
+}
+
+TBitsBooster::TBitsBooster(const uint32_t* bitBoostMask) : BitBoostMask(bitBoostMask) { // Modify the constructor
     for (uint32_t i = 0; i < MaxBfus; ++i) {
         if (BitBoostMask[i] == 0)
             continue;
@@ -98,7 +127,6 @@ uint32_t TBitsBooster::ApplyBoost(std::vector<uint32_t>* bitsPerEachBlock, uint3
     return surplus;
 }
 
-
 vector<uint32_t> TAtrac1SimpleBitAlloc::CalcBitsAllocation(const std::vector<TScaledBlock>& scaledBlocks,
                                                            const uint32_t bfuNum,
                                                            const TFloat spread,
@@ -110,13 +138,13 @@ vector<uint32_t> TAtrac1SimpleBitAlloc::CalcBitsAllocation(const std::vector<TSc
         int tmp = spread * ( (TFloat)scaledBlocks[i].ScaleFactorIndex/3.2) + (1.0 - spread) * fix - shift;
         if (tmp > 16) {
             bitsPerEachBlock[i] = 16;
-        } else if (tmp < 2) {
+        } else if (tmp < 2 || fix == 0) {
             bitsPerEachBlock[i] = 0;
         } else {
             bitsPerEachBlock[i] = tmp;
         }
     }
-    return bitsPerEachBlock;	
+    return bitsPerEachBlock;
 }
 
 uint32_t TAtrac1SimpleBitAlloc::GetMaxUsedBfuId(const vector<uint32_t>& bitsPerEachBlock) {
@@ -218,9 +246,21 @@ uint32_t TAtrac1SimpleBitAlloc::Write(const std::vector<TScaledBlock>& scaledBlo
     return BfuAmountTab[bfuIdx];
 }
 
-TAtrac1BitStreamWriter::TAtrac1BitStreamWriter(ICompressedOutput* container)
-    : Container(container)
+TAtrac1BitStreamWriter::TAtrac1BitStreamWriter(ICompressedOutput* container, size_t channelIdx)
+    : Container(container), ChannelIdx(channelIdx)
 {
+    if (ChannelIdx == 0)
+    {
+        parseEnvVariable("TABLE_LONG_LEFT", FixedBitAllocTableLong, DefaultFixedBitAllocTableLong);
+        parseEnvVariable("TABLE_SHORT_LEFT", FixedBitAllocTableShort, DefaultFixedBitAllocTableShort);
+        parseEnvVariable("TABLE_BOOST_LEFT", BitBoostMask, DefaultBitBoostMask);
+    }
+    else
+    {
+        parseEnvVariable("TABLE_LONG_RIGHT", FixedBitAllocTableLong, DefaultFixedBitAllocTableLong);
+        parseEnvVariable("TABLE_SHORT_RIGHT", FixedBitAllocTableShort, DefaultFixedBitAllocTableShort);
+        parseEnvVariable("TABLE_BOOST_RIGHT", BitBoostMask, DefaultBitBoostMask);
+    }
     NEnv::SetRoundFloat();
 };
 

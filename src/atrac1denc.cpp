@@ -166,7 +166,7 @@ TPCMEngine<TFloat>::TProcessLambda TAtrac1Encoder::GetLambda() {
     const uint32_t srcChannels = Aea->GetChannelNum();
     vector<IAtrac1BitAlloc*> bitAlloc;
     for (size_t i = 0; i < srcChannels; i++) {
-        bitAlloc.push_back(new TAtrac1SimpleBitAlloc(Aea.get(), Settings.GetBfuIdxConst(), Settings.GetFastBfuNumSearch()));
+        bitAlloc.push_back(new TAtrac1SimpleBitAlloc(Aea.get(), Settings.GetBfuIdxConst(), Settings.GetFastBfuNumSearch(), i));
     }
 
     return [this, srcChannels, bitAlloc](TFloat* data, const TPCMEngine<TFloat>::ProcessMeta& /*meta*/) {

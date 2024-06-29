@@ -26,30 +26,39 @@
 #include <cstdint>
 
 namespace NAtracDEnc {
-namespace NAtrac1 {
+namespace NAtrac1
+{
+    using NAtracDEnc::TScaledBlock;
 
-using NAtracDEnc::TScaledBlock;
-
-class IAtrac1BitAlloc {
-public:
-    IAtrac1BitAlloc() {};
-    virtual ~IAtrac1BitAlloc() {};
-    virtual uint32_t Write(const std::vector<TScaledBlock>& scaledBlocks, const TBlockSize& blockSize) = 0;
-};
+    class IAtrac1BitAlloc {
+    public:
+        IAtrac1BitAlloc() {};
+        virtual ~IAtrac1BitAlloc() {};
+        virtual uint32_t Write(const std::vector<TScaledBlock>& scaledBlocks, const TBlockSize& blockSize) = 0;
+    };
 
 class TBitsBooster : public virtual TAtrac1Data {
     std::multimap<uint32_t, uint32_t> BitsBoostMap; //bits needed -> position
     uint32_t MaxBitsPerIteration;
     uint32_t MinKey;
+    const uint32_t* BitBoostMask; // Add this line
+
 public:
-    TBitsBooster();
+    TBitsBooster(const uint32_t* bitBoostMask); // Modify the constructor
     uint32_t ApplyBoost(std::vector<uint32_t>* bitsPerEachBlock, uint32_t cur, uint32_t target);
 };
 
 class TAtrac1BitStreamWriter : public virtual TAtrac1Data {
+private:
+    void parseEnvVariable(const char* envVarName, uint32_t* table, const uint32_t* defaultTable);
+
     ICompressedOutput* Container;
+    const size_t ChannelIdx;
 public:
-    explicit TAtrac1BitStreamWriter(ICompressedOutput* container);
+    uint32_t FixedBitAllocTableLong[51];
+    uint32_t FixedBitAllocTableShort[51];
+    uint32_t BitBoostMask[51];
+    explicit TAtrac1BitStreamWriter(ICompressedOutput* container, size_t channelIdx);
 
     void WriteBitStream(const std::vector<uint32_t>& bitsPerEachBlock, const std::vector<TScaledBlock>& scaledBlocks,
                         uint32_t bfuAmountIdx, const TBlockSize& blockSize);
@@ -63,13 +72,14 @@ class TAtrac1SimpleBitAlloc : public TAtrac1BitStreamWriter, public TBitsBooster
     uint32_t GetMaxUsedBfuId(const std::vector<uint32_t>& bitsPerEachBlock);
     uint32_t CheckBfuUsage(bool* changed, uint32_t curBfuId, const std::vector<uint32_t>& bitsPerEachBlock);
 public:
-    explicit TAtrac1SimpleBitAlloc(ICompressedOutput* container, uint32_t bfuIdxConst, bool fastBfuNumSearch)
-        : TAtrac1BitStreamWriter(container)
+    explicit TAtrac1SimpleBitAlloc(ICompressedOutput* container, uint32_t bfuIdxConst, bool fastBfuNumSearch, size_t channelIdx)
+        : TAtrac1BitStreamWriter(container, channelIdx)
+        , TBitsBooster(FixedBitAllocTableLong) // Pass the correct BitBoostMask reference
         , BfuIdxConst(bfuIdxConst)
         , FastBfuNumSearch(fastBfuNumSearch)
     {}
     ~TAtrac1SimpleBitAlloc() {};
-     uint32_t Write(const std::vector<TScaledBlock>& scaledBlocks, const TBlockSize& blockSize) override;
+    uint32_t Write(const std::vector<TScaledBlock>& scaledBlocks, const TBlockSize& blockSize) override;
 };
 
 } //namespace NAtrac1
