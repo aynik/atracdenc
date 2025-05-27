@@ -33,7 +33,7 @@ class Atrac1AnalysisFilterBank {
 public:
     Atrac1AnalysisFilterBank() {
         MidLowTmp.resize(512);
-        DelayBuf.resize(delayComp + 512);
+        DelayBuf.resize(delayComp + 512, 0.0f);
     }
     void Analysis(TIn* pcm, float* low, float* mid, float* hi) {
         memcpy(&DelayBuf[0], &DelayBuf[256], sizeof(float) *  delayComp);
@@ -54,7 +54,7 @@ class Atrac1SynthesisFilterBank {
 public:
     Atrac1SynthesisFilterBank() {
         MidLowTmp.resize(512);
-        DelayBuf.resize(delayComp + 512);
+        DelayBuf.resize(delayComp + 512, 0.0f);
     }
     void Synthesis(TOut* pcm, float* low, float* mid, float* hi) {
         memcpy(&DelayBuf[0], &DelayBuf[256], sizeof(float) *  delayComp);

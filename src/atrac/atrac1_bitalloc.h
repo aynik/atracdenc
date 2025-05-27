@@ -18,6 +18,7 @@
 
 #pragma once
 #include "atrac_scale.h"
+#include "atrac_intermediate_data.h"
 #include "atrac/atrac1.h"
 #include "../aea.h"
 #include <vector>
@@ -47,9 +48,10 @@ public:
 
 class TAtrac1BitStreamWriter {
     ICompressedOutput* Container;
+protected: // Allow derived class to access
+    NAtrac1::TAtrac1EncoderChannelIntermediateData* pCurrentChannelIntermediateData;
 public:
-    explicit TAtrac1BitStreamWriter(ICompressedOutput* container);
-
+    explicit TAtrac1BitStreamWriter(ICompressedOutput* container, NAtrac1::TAtrac1EncoderChannelIntermediateData* currentChannelIntermediateData = nullptr);
     void WriteBitStream(const std::vector<uint32_t>& bitsPerEachBlock, const std::vector<TScaledBlock>& scaledBlocks,
                         uint32_t bfuAmountIdx, const TAtrac1Data::TBlockSizeMod& blockSize);
 };
@@ -66,7 +68,7 @@ class TAtrac1SimpleBitAlloc : public TAtrac1BitStreamWriter, public TBitsBooster
     uint32_t GetMaxUsedBfuId(const std::vector<uint32_t>& bitsPerEachBlock);
     uint32_t CheckBfuUsage(bool* changed, uint32_t curBfuId, const std::vector<uint32_t>& bitsPerEachBlock);
 public:
-    TAtrac1SimpleBitAlloc(ICompressedOutput* container, uint32_t bfuIdxConst, bool fastBfuNumSearch);
+    TAtrac1SimpleBitAlloc(ICompressedOutput* container, uint32_t bfuIdxConst, bool fastBfuNumSearch, NAtrac1::TAtrac1EncoderChannelIntermediateData* currentChannelIntermediateData = nullptr);
     ~TAtrac1SimpleBitAlloc() {};
     uint32_t Write(const std::vector<TScaledBlock>& scaledBlocks, const TAtrac1Data::TBlockSizeMod& blockSize, float loudness) override;
 };

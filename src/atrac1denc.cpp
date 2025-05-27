@@ -38,11 +38,21 @@ TAtrac1Encoder::TAtrac1Encoder(TCompressedOutputPtr&& aea, TAtrac1EncodeSettings
     , Settings(std::move(settings))
     , LoudnessCurve(CreateLoudnessCurve(TAtrac1Data::NumSamples))
 {
+    for (int ch = 0; ch < 2; ch++) {
+        memset(PcmBufLow[ch], 0, sizeof(PcmBufLow[ch]));
+        memset(PcmBufMid[ch], 0, sizeof(PcmBufMid[ch]));
+        memset(PcmBufHi[ch], 0, sizeof(PcmBufHi[ch]));
+    }
 }
 
 TAtrac1Decoder::TAtrac1Decoder(TCompressedInputPtr&& aea)
     : Aea(std::move(aea))
 {
+    for (int ch = 0; ch < 2; ch++) {
+        memset(PcmBufLow[ch], 0, sizeof(PcmBufLow[ch]));
+        memset(PcmBufMid[ch], 0, sizeof(PcmBufMid[ch]));
+        memset(PcmBufHi[ch], 0, sizeof(PcmBufHi[ch]));
+    }
 }
 
 static void vector_fmul_window(float *dst, const float *src0,
@@ -135,20 +145,19 @@ void TAtrac1MDCT::IMdct(float Specs[512], const TAtrac1Data::TBlockSizeMod& mode
 
 TPCMEngine::TProcessLambda TAtrac1Decoder::GetLambda() {
     return [this](float* data, const TPCMEngine::ProcessMeta& /*meta*/) {
-        float sum[512];
+        float sum[TAtrac1Data::NumSamples];
+        float specs[TAtrac1Data::NumSamples];
         const uint32_t srcChannels = Aea->GetChannelNum();
         for (uint32_t channel = 0; channel < srcChannels; channel++) {
             std::unique_ptr<ICompressedIO::TFrame> frame(Aea->ReadFrame());
+            if (!frame) continue;
 
             TBitStream bitstream(frame->Get(), frame->Size());
+            NAtrac1::TAtrac1Dequantiser local_dequantiser;
+            local_dequantiser.Dequant(&bitstream, specs, channel);
+            TAtrac1Data::TBlockSizeMod mode = local_dequantiser.GetBlockSizeMod(channel);
 
-            TAtrac1Data::TBlockSizeMod mode(&bitstream);
-            TAtrac1Dequantiser dequantiser;
-            vector<float> specs;
-            specs.resize(512);;
-            dequantiser.Dequant(&bitstream, mode, &specs[0]);
-
-            IMdct(&specs[0], mode, &PcmBufLow[channel][0], &PcmBufMid[channel][0], &PcmBufHi[channel][0]);
+            IMdct(specs, mode, &PcmBufLow[channel][0], &PcmBufMid[channel][0], &PcmBufHi[channel][0]);
             SynthesisFilterBank[channel].Synthesis(&sum[0], &PcmBufLow[channel][0], &PcmBufMid[channel][0], &PcmBufHi[channel][0]);
             for (size_t i = 0; i < TAtrac1Data::NumSamples; ++i) {
                 if (sum[i] > PcmValueMax)
@@ -166,11 +175,6 @@ TPCMEngine::TProcessLambda TAtrac1Decoder::GetLambda() {
 
 TPCMEngine::TProcessLambda TAtrac1Encoder::GetLambda() {
     const uint32_t srcChannels = Aea->GetChannelNum();
-    vector<IAtrac1BitAlloc*> bitAlloc(srcChannels);
-
-    for (auto& x : bitAlloc) {
-        x = new TAtrac1SimpleBitAlloc(Aea.get(), Settings.GetBfuIdxConst(), Settings.GetFastBfuNumSearch());
-    }
 
     struct TChannelData {
         TChannelData()
@@ -185,17 +189,38 @@ TPCMEngine::TProcessLambda TAtrac1Encoder::GetLambda() {
     using TData = vector<TChannelData>;
     auto buf = std::make_shared<TData>(srcChannels);
 
-    return [this, srcChannels, bitAlloc, buf](float* data, const TPCMEngine::ProcessMeta& /*meta*/) {
-        TAtrac1Data::TBlockSizeMod blockSz[2];
+    return [this, srcChannels, buf](float* data, const TPCMEngine::ProcessMeta& /*meta*/) {
+        m_last_frame_intermediate_data.resize_channels(srcChannels);
 
+        // Create bitAllocators AFTER resize_channels to ensure valid pointers
+        std::vector<TAtrac1SimpleBitAlloc> bitAllocators;
+        bitAllocators.reserve(srcChannels);
+        for (uint32_t ch_idx = 0; ch_idx < srcChannels; ++ch_idx) {
+            bitAllocators.emplace_back(
+                Aea.get(),
+                Settings.GetBfuIdxConst(),
+                Settings.GetFastBfuNumSearch(),
+                &m_last_frame_intermediate_data.channel_data[ch_idx]
+            );
+        }
+
+        TAtrac1Data::TBlockSizeMod blockSz[2];
         uint32_t windowMasks[2] = {0};
+
         for (uint32_t channel = 0; channel < srcChannels; channel++) {
+            auto& ch_intermediate_data = m_last_frame_intermediate_data.channel_data[channel];
+
             float src[TAtrac1Data::NumSamples];
             for (size_t i = 0; i < TAtrac1Data::NumSamples; ++i) {
                 src[i] = data[i * srcChannels + channel];
+                ch_intermediate_data.pcm_input[i] = src[i];
             }
 
             AnalysisFilterBank[channel].Analysis(&src[0], &PcmBufLow[channel][0], &PcmBufMid[channel][0], &PcmBufHi[channel][0]);
+
+            std::copy(&PcmBufLow[channel][0], &PcmBufLow[channel][128], ch_intermediate_data.qmf_output_low.begin());
+            std::copy(&PcmBufMid[channel][0], &PcmBufMid[channel][128], ch_intermediate_data.qmf_output_mid.begin());
+            std::copy(&PcmBufHi[channel][0], &PcmBufHi[channel][256], ch_intermediate_data.qmf_output_hi.begin());
 
             uint32_t& windowMask = windowMasks[channel];
             if (Settings.GetWindowMode() == TAtrac1EncodeSettings::EWindowMode::EWM_AUTO) {
@@ -213,11 +238,12 @@ TPCMEngine::TProcessLambda TAtrac1Encoder::GetLambda() {
                 windowMask = Settings.GetWindowMask();
             }
 
-            blockSz[channel]  = TAtrac1Data::TBlockSizeMod(windowMask & 0x1, windowMask & 0x2, windowMask & 0x4); //low, mid, hi
+            blockSz[channel] = TAtrac1Data::TBlockSizeMod(windowMask & 0x1, windowMask & 0x2, windowMask & 0x4);
+            ch_intermediate_data.effective_block_size_mod = blockSz[channel];
 
             auto& specs = (*buf)[channel].Specs;
-
             Mdct(&specs[0], &PcmBufLow[channel][0], &PcmBufMid[channel][0], &PcmBufHi[channel][0], blockSz[channel]);
+            std::copy(specs.begin(), specs.end(), ch_intermediate_data.mdct_specs.begin());
 
             float l = 0.0;
             for (size_t i = 0; i < specs.size(); i++) {
@@ -234,7 +260,9 @@ TPCMEngine::TProcessLambda TAtrac1Encoder::GetLambda() {
         }
 
         for (uint32_t channel = 0; channel < srcChannels; channel++) {
-            bitAlloc[channel]->Write(Scaler.ScaleFrame((*buf)[channel].Specs, blockSz[channel]), blockSz[channel], Loudness / LoudFactor);
+            auto& ch_intermediate_data = m_last_frame_intermediate_data.channel_data[channel];
+            ch_intermediate_data.scaled_blocks_data = Scaler.ScaleFrame((*buf)[channel].Specs, blockSz[channel]);
+            bitAllocators[channel].Write(ch_intermediate_data.scaled_blocks_data, blockSz[channel], Loudness / LoudFactor);
         }
     };
 }

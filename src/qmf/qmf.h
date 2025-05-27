@@ -18,6 +18,8 @@
 
 #pragma once
 #include <string.h>
+#include <iomanip>
+#include <iostream>
 
 #include "../config.h"
 
@@ -35,10 +37,10 @@ public:
         for (size_t i = 0 ; i < sz/2; i++) {
             QmfWindow[i] = QmfWindow[ sz - 1 - i] = TapHalf[i] * 2.0;
         }
-        for (size_t i = 0; i < sizeof(PcmBuffer)/sizeof(PcmBuffer[0]); i++) {
-            PcmBuffer[i] = 0;
-            PcmBufferMerge[i] = 0;
-        }
+
+        memset(PcmBuffer, 0, sizeof(PcmBuffer));
+        memset(PcmBufferMerge, 0, sizeof(PcmBufferMerge));
+        memset(DelayBuff, 0, sizeof(DelayBuff));
     }
 
     void Analysis(TPCM* in, float* lower, float* upper) {

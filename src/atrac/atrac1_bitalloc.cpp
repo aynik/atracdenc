@@ -100,8 +100,8 @@ uint32_t TBitsBooster::ApplyBoost(std::vector<uint32_t>* bitsPerEachBlock, uint3
 
 std::vector<float> TAtrac1SimpleBitAlloc::ATHLong;
 
-TAtrac1SimpleBitAlloc::TAtrac1SimpleBitAlloc(ICompressedOutput* container, uint32_t bfuIdxConst, bool fastBfuNumSearch)
-    : TAtrac1BitStreamWriter(container)
+TAtrac1SimpleBitAlloc::TAtrac1SimpleBitAlloc(ICompressedOutput* container, uint32_t bfuIdxConst, bool fastBfuNumSearch, NAtrac1::TAtrac1EncoderChannelIntermediateData* currentChannelIntermediateData)
+    : TAtrac1BitStreamWriter(container, currentChannelIntermediateData)
     , BfuIdxConst(bfuIdxConst)
     , FastBfuNumSearch(fastBfuNumSearch)
 {
@@ -247,14 +247,17 @@ uint32_t TAtrac1SimpleBitAlloc::Write(const std::vector<TScaledBlock>& scaledBlo
             break;
         }
     }
+
     ApplyBoost(&bitsPerEachBlock, curBitsPerBfus, targetBitsPerBfus);
+    if (pCurrentChannelIntermediateData) {
+        pCurrentChannelIntermediateData->final_bits_per_bfu = bitsPerEachBlock;
+    }
     WriteBitStream(bitsPerEachBlock, scaledBlocks, bfuIdx, blockSize);
     return TAtrac1Data::BfuAmountTab[bfuIdx];
 }
 
-TAtrac1BitStreamWriter::TAtrac1BitStreamWriter(ICompressedOutput* container)
-    : Container(container)
-{
+TAtrac1BitStreamWriter::TAtrac1BitStreamWriter(ICompressedOutput* container, NAtrac1::TAtrac1EncoderChannelIntermediateData* currentChannelIntermediateData)
+    : Container(container), pCurrentChannelIntermediateData(currentChannelIntermediateData) {
     NEnv::SetRoundFloat();
 };
 
@@ -262,69 +265,81 @@ void TAtrac1BitStreamWriter::WriteBitStream(const vector<uint32_t>& bitsPerEachB
                                             const std::vector<TScaledBlock>& scaledBlocks,
                                             uint32_t bfuAmountIdx,
                                             const TAtrac1Data::TBlockSizeMod& blockSize) {
-    NBitStream::TBitStream bitStream;
+    NBitStream::TBitStream bitStreamLogicOnly;
     size_t bitUsed = 0;
     if (bfuAmountIdx >= (1 << TAtrac1Data::BitsPerBfuAmountTabIdx)) {
         cerr << "Wrong bfuAmountIdx (" << bfuAmountIdx << "), frame skiped" << endl;
         return;
     }
-    bitStream.Write(0x2 - blockSize.LogCount[0], 2);
+    bitStreamLogicOnly.Write(0x2 - blockSize.LogCount[0], 2);
     bitUsed+=2;
 
-    bitStream.Write(0x2 - blockSize.LogCount[1], 2);
+    bitStreamLogicOnly.Write(0x2 - blockSize.LogCount[1], 2);
     bitUsed+=2;
 
-    bitStream.Write(0x3 - blockSize.LogCount[2], 2);
-    bitStream.Write(0, 2);
+    bitStreamLogicOnly.Write(0x3 - blockSize.LogCount[2], 2);
+    bitStreamLogicOnly.Write(0, 2);
     bitUsed+=4;
 
-    bitStream.Write(bfuAmountIdx, TAtrac1Data::BitsPerBfuAmountTabIdx);
+    bitStreamLogicOnly.Write(bfuAmountIdx, TAtrac1Data::BitsPerBfuAmountTabIdx);
     bitUsed += TAtrac1Data::BitsPerBfuAmountTabIdx;
 
-    bitStream.Write(0, 2);
-    bitStream.Write(0, 3);
+    bitStreamLogicOnly.Write(0, 2);
+    bitStreamLogicOnly.Write(0, 3);
     bitUsed+= 5;
 
     for (const auto wordLength : bitsPerEachBlock) {
         const auto tmp = wordLength ? (wordLength - 1) : 0;
-        bitStream.Write(tmp, 4);
+        bitStreamLogicOnly.Write(tmp, 4);
         bitUsed+=4;
     }
     for (size_t i = 0; i < bitsPerEachBlock.size(); ++i) {
-        bitStream.Write(scaledBlocks[i].ScaleFactorIndex, 6);
+        bitStreamLogicOnly.Write(scaledBlocks[i].ScaleFactorIndex, 6);
         bitUsed+=6;
     }
+    if (pCurrentChannelIntermediateData) {
+        pCurrentChannelIntermediateData->quantized_values.clear();
+        pCurrentChannelIntermediateData->quantization_error.clear();
+    }
     for (size_t i = 0; i < bitsPerEachBlock.size(); ++i) {
-        const auto wordLength = bitsPerEachBlock[i];
-        if (wordLength == 0 || wordLength == 1)
-            continue;
-
-        const float multiple = ((1 << (wordLength - 1)) - 1);
-        for (const float val : scaledBlocks[i].Values) {
-            const int tmp = lrint(val * multiple);
-            const uint32_t testwl = bitsPerEachBlock[i] ? (bitsPerEachBlock[i] - 1) : 0;
-            const uint32_t a = !!testwl + testwl;
-            if (a != wordLength) {
-                cerr << "wordlen error " << a << " " << wordLength << endl;
-                abort();
+        const uint32_t actual_bits_for_sample = bitsPerEachBlock[i];
+        if (actual_bits_for_sample >= 2) {
+            const float multiple = ((1 << (actual_bits_for_sample - 1)) - 1);
+            for (const float val_from_scaler : scaledBlocks[i].Values) {
+                const int quantized_int_val = lrint(val_from_scaler * multiple);
+                if (pCurrentChannelIntermediateData) {
+                    pCurrentChannelIntermediateData->quantized_values.push_back(quantized_int_val);
+                    float dequant_val = static_cast<float>(quantized_int_val) / multiple;
+                    pCurrentChannelIntermediateData->quantization_error.push_back(val_from_scaler - dequant_val);
+                }
+                bitStreamLogicOnly.Write(NBitStream::MakeSign(quantized_int_val, actual_bits_for_sample), actual_bits_for_sample);
+                bitUsed += actual_bits_for_sample;
             }
-            bitStream.Write(NBitStream::MakeSign(tmp, wordLength), wordLength);
-            bitUsed+=wordLength;
+        } else if (pCurrentChannelIntermediateData && actual_bits_for_sample == 1) {
+            for (const float val_from_scaler : scaledBlocks[i].Values) {
+                 pCurrentChannelIntermediateData->quantized_values.push_back(0);
+                 pCurrentChannelIntermediateData->quantization_error.push_back(val_from_scaler - 0.0f);
+            }
         }
     }
 
-    bitStream.Write(0x0, 8);
-    bitStream.Write(0x0, 8);
+    bitStreamLogicOnly.Write(0x0, 8);
+    bitStreamLogicOnly.Write(0x0, 8);
 
     bitUsed+=16;
-    bitStream.Write(0x0, 8);
+    bitStreamLogicOnly.Write(0x0, 8);
 
     bitUsed+=8;
     if (bitUsed > TAtrac1Data::SoundUnitSize * 8) {
         cerr << "ATRAC1 bitstream corrupted, used: " << bitUsed << " exp: " << TAtrac1Data::SoundUnitSize * 8 << endl;
         abort();
     }
-    Container->WriteFrame(bitStream.GetBytes());
+
+    if (pCurrentChannelIntermediateData) {
+        auto frame_bytes_char = bitStreamLogicOnly.GetBytes();
+        pCurrentChannelIntermediateData->frame_bitstream_payload.assign(frame_bytes_char.begin(), frame_bytes_char.end());
+    }
+    Container->WriteFrame(bitStreamLogicOnly.GetBytes());
 }
 
 } //namespace NAtrac1

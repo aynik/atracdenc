@@ -24,6 +24,7 @@
 #include "atrac/atrac1_qmf.h"
 #include "atrac/atrac_scale.h"
 #include "lib/mdct/mdct.h"
+#include "atrac/atrac_intermediate_data.h"
 
 #include <assert.h>
 #include <vector>
@@ -100,6 +101,9 @@ class TAtrac1Encoder : public IProcessor, public TAtrac1MDCT {
     TScaler<NAtrac1::TAtrac1Data> Scaler;
     static constexpr float LoudFactor = 0.006;
     float Loudness = LoudFactor;
+
+public:
+    NAtrac1::TAtrac1EncoderFrameIntermediateData m_last_frame_intermediate_data;
 
 public:
     TAtrac1Encoder(TCompressedOutputPtr&& aea, NAtrac1::TAtrac1EncodeSettings&& settings);
