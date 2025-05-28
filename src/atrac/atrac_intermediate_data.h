@@ -27,6 +27,8 @@ struct TAtrac1EncoderChannelIntermediateData {
     // Bit allocation
     std::vector<uint32_t> final_bits_per_bfu; // [num_bfus_for_frame]
 
+    uint32_t final_bfu_amount_table_idx;
+
     // Quantized integer values (flat list for BFUs with bits > 0)
     std::vector<int32_t> quantized_values;
 
@@ -34,7 +36,7 @@ struct TAtrac1EncoderChannelIntermediateData {
     std::vector<float> quantization_error;
 
     // Raw bitstream payload for this channel's frame
-    std::vector<uint8_t> frame_bitstream_payload;
+    std::vector<char> frame_bitstream_payload;
 
     TAtrac1EncoderChannelIntermediateData() {
         pcm_input.resize(TAtrac1Data::NumSamples);

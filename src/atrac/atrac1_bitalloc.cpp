@@ -251,6 +251,7 @@ uint32_t TAtrac1SimpleBitAlloc::Write(const std::vector<TScaledBlock>& scaledBlo
     ApplyBoost(&bitsPerEachBlock, curBitsPerBfus, targetBitsPerBfus);
     if (pCurrentChannelIntermediateData) {
         pCurrentChannelIntermediateData->final_bits_per_bfu = bitsPerEachBlock;
+        pCurrentChannelIntermediateData->final_bfu_amount_table_idx = bfuIdx;
     }
     WriteBitStream(bitsPerEachBlock, scaledBlocks, bfuIdx, blockSize);
     return TAtrac1Data::BfuAmountTab[bfuIdx];
@@ -340,6 +341,80 @@ void TAtrac1BitStreamWriter::WriteBitStream(const vector<uint32_t>& bitsPerEachB
         pCurrentChannelIntermediateData->frame_bitstream_payload.assign(frame_bytes_char.begin(), frame_bytes_char.end());
     }
     Container->WriteFrame(bitStreamLogicOnly.GetBytes());
+}
+
+TAtrac1NNBitStreamAssembler::TAtrac1NNBitStreamAssembler() {
+    NEnv::SetRoundFloat();
+}
+
+std::vector<char> TAtrac1NNBitStreamAssembler::AssembleChannelPayload(
+    const TAtrac1NNFrameParameters& params) {
+    
+    NBitStream::TBitStream bitStreamLogicOnly;
+
+    if (params.BfuAmountTableIndex >= (1 << TAtrac1Data::BitsPerBfuAmountTabIdx)) {
+        throw std::runtime_error("Wrong bfuAmountTableIndex");
+    }
+
+    bitStreamLogicOnly.Write(0x2 - params.BlockMode.LogCount[0], 2);
+    bitStreamLogicOnly.Write(0x2 - params.BlockMode.LogCount[1], 2);
+    bitStreamLogicOnly.Write(0x3 - params.BlockMode.LogCount[2], 2);
+    bitStreamLogicOnly.Write(0, 2);
+
+    bitStreamLogicOnly.Write(params.BfuAmountTableIndex, TAtrac1Data::BitsPerBfuAmountTabIdx);
+
+    bitStreamLogicOnly.Write(0, 2);
+    bitStreamLogicOnly.Write(0, 3);
+
+    const uint32_t numBfusInFrame = TAtrac1Data::BfuAmountTab[params.BfuAmountTableIndex];
+    if (params.WordLengths.size() != numBfusInFrame ||
+        params.ScaleFactorIndices.size() != numBfusInFrame ||
+        params.QuantizedSpectrum.size() != numBfusInFrame) {
+        throw std::runtime_error("Mismatch in parameter vector sizes and numBFUsInFrame");
+    }
+
+    for (uint32_t i = 0; i < numBfusInFrame; ++i) {
+        uint32_t wordLength = params.WordLengths[i];
+        if (wordLength > 16) wordLength = 16;
+        uint32_t stored_idwl = (wordLength == 0) ? 0 : (wordLength - 1);
+        bitStreamLogicOnly.Write(stored_idwl, TAtrac1Data::BitsPerIDWL);
+    }
+
+    for (uint32_t i = 0; i < numBfusInFrame; ++i) {
+        bitStreamLogicOnly.Write(params.ScaleFactorIndices[i], TAtrac1Data::BitsPerIDSF);
+    }
+
+    for (uint32_t i = 0; i < numBfusInFrame; ++i) {
+        uint32_t nn_wordlength = params.WordLengths[i];
+        if (nn_wordlength > 16) nn_wordlength = 16;
+        uint32_t stored_idwl = (nn_wordlength == 0) ? 0 : (nn_wordlength - 1);
+        uint32_t bits_dequantizer_reads = (stored_idwl == 0) ? 0 : (stored_idwl + 1);
+        const uint32_t num_coeffs_in_bfu = TAtrac1Data::SpecsPerBlock[i];
+
+        if (bits_dequantizer_reads > 0) {
+            if (params.QuantizedSpectrum[i].size() != num_coeffs_in_bfu) {
+                throw std::runtime_error("Mismatch in QuantizedSpectrum size for BFU " + std::to_string(i) +
+                                       " when bits_dequantizer_reads = " + std::to_string(bits_dequantizer_reads));
+            }
+            for (const int32_t quantized_int_val : params.QuantizedSpectrum[i]) {
+                bitStreamLogicOnly.Write(NBitStream::MakeSign(quantized_int_val, bits_dequantizer_reads),
+                                       bits_dequantizer_reads);
+            }
+        }
+    }
+
+    bitStreamLogicOnly.Write(0x0, 8);
+    bitStreamLogicOnly.Write(0x0, 8);
+    bitStreamLogicOnly.Write(0x0, 8);
+
+    std::vector<char> payload = bitStreamLogicOnly.GetBytes();
+    if (payload.size() > TAtrac1Data::SoundUnitSize) {
+        payload.resize(TAtrac1Data::SoundUnitSize);
+    } else if (payload.size() < TAtrac1Data::SoundUnitSize) {
+        payload.resize(TAtrac1Data::SoundUnitSize, 0);
+    }
+
+    return payload;
 }
 
 } //namespace NAtrac1

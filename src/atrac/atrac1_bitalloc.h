@@ -73,5 +73,11 @@ public:
     uint32_t Write(const std::vector<TScaledBlock>& scaledBlocks, const TAtrac1Data::TBlockSizeMod& blockSize, float loudness) override;
 };
 
+class TAtrac1NNBitStreamAssembler {
+public:
+    TAtrac1NNBitStreamAssembler();
+    std::vector<char> AssembleChannelPayload(const TAtrac1NNFrameParameters& params);
+};
+
 } //namespace NAtrac1
 } //namespace NAtracDEnc

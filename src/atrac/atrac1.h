@@ -21,6 +21,7 @@
 #include <array>
 #include <map>
 #include <math.h>
+#include <vector>
 #include "config.h"
 
 namespace NBitStream {
@@ -134,6 +135,14 @@ public:
             }
         }
     }
+};
+
+struct TAtrac1NNFrameParameters {
+    TAtrac1Data::TBlockSizeMod BlockMode;
+    uint32_t BfuAmountTableIndex;
+    std::vector<uint32_t> WordLengths;
+    std::vector<uint8_t> ScaleFactorIndices;
+    std::vector<std::vector<int32_t>> QuantizedSpectrum;
 };
 
 } //namespace NAtrac1
